@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import SubmissionReviewPanel from "@/components/teacher/SubmissionReviewPanel";
 
 type Profile = {
   full_name: string;
@@ -354,6 +355,7 @@ if (submissionsError) {
     );
   }
 async function togglePublication(row: TeacherSubmission) {
+
   const newValue = !row.is_public;
 
   const { data, error } = await supabase
@@ -383,69 +385,94 @@ async function togglePublication(row: TeacherSubmission) {
       : "Публикация работы отменена."
   );
 }
-  async function saveReview(row: TeacherSubmission) {
-    const score = Number(row.scoreDraft);
+  
+async function saveReview(
+  row: TeacherSubmission
+): Promise<boolean> {
+  const score = Number(row.scoreDraft);
 
-    if (
-      row.scoreDraft.trim() === "" ||
-      !Number.isInteger(score) ||
-      score < 0 ||
-      score > 10
-    ) {
-      setTeacherMessage("Укажите целое число от 0 до 10 баллов.");
-      return;
-    }
-
-    setSavingId(row.id);
-    setTeacherMessage("");
-
-    
-const { data: updatedRow, error: updateError } = await supabase
-  .from("submissions")
-  .update({
-    score,
-    teacher_feedback: row.feedbackDraft.trim(),
-    status: "approved",
-    reviewed_at: new Date().toISOString(),
-  })
-  .eq("id", row.id)
-  .select("id, score, teacher_feedback, status")
-  .maybeSingle();
-
-if (updateError) {
-  console.error("Ошибка сохранения проверки:", updateError);
-  setTeacherMessage("Ошибка сохранения: " + updateError.message);
-  setSavingId(null);
-  return;
-}
-
-if (!updatedRow) {
-  console.error("Запись не обновлена. ID:", row.id);
-  setTeacherMessage(
-    "Запись не обновлена. Проверьте права доступа UPDATE."
-  );
-  setSavingId(null);
-  return;
-}
-
-console.log("Проверка успешно сохранена:", updatedRow);
-
-setTeacherRows((current) =>
-  current.map((item) =>
-    item.id === row.id
-      ? {
-          ...item,
-          score,
-          status: "approved",
-          teacher_feedback: row.feedbackDraft.trim(),
-        }
-      : item
-  )
-);
-
-    setTeacherMessage("Проверка успешно сохранена!");
-    setSavingId(null);
+  if (
+    row.scoreDraft.trim() === "" ||
+    !Number.isInteger(score) ||
+    score < 0 ||
+    score > 10
+  ) {
+    setTeacherMessage("Укажите целое число от 0 до 10 баллов.");
+    return false;
   }
+
+  setSavingId(row.id);
+  setTeacherMessage("");
+
+  const { data: updatedRow, error: updateError } = await supabase
+    .from("submissions")
+    .update({
+      score,
+      teacher_feedback: row.feedbackDraft.trim(),
+      status: "approved",
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", row.id)
+    .select("id, score, teacher_feedback, status")
+    .maybeSingle();
+
+  if (updateError) {
+    console.error("Ошибка сохранения проверки:", updateError);
+    setTeacherMessage("Ошибка сохранения: " + updateError.message);
+    setSavingId(null);
+    return false;
+  }
+
+  if (!updatedRow) {
+    console.error("Запись не обновлена. ID:", row.id);
+    setTeacherMessage(
+      "Запись не обновлена. Проверьте права доступа UPDATE."
+    );
+    setSavingId(null);
+    return false;
+  }
+
+  setTeacherRows((current) =>
+    current.map((item) =>
+      item.id === row.id
+        ? {
+            ...item,
+            score,
+            status: "approved",
+            teacher_feedback: row.feedbackDraft.trim(),
+          }
+        : item
+    )
+  );
+
+  setTeacherMessage("Проверка успешно сохранена!");
+  setSavingId(null);
+
+  return true;
+}
+
+
+async function saveReviewFromPanel(
+  id: string,
+  score: number,
+  feedback: string
+) {
+  const row = teacherRows.find((item) => item.id === id);
+
+  if (!row) {
+    throw new Error("Работа ученика не найдена.");
+  }
+
+  const success = await saveReview({
+    ...row,
+    scoreDraft: String(score),
+    feedbackDraft: feedback,
+  });
+
+  if (!success) {
+    throw new Error("Не удалось сохранить проверку.");
+  }
+}
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -500,7 +527,19 @@ setTeacherRows((current) =>
     const approvedCount = teacherRows.filter(
       (row) => row.status === "approved"
     ).length;
-
+    const reviewItems = teacherRows.map((row) => ({
+  id: row.id,
+  studentName: row.student_name,
+  missionTitle: row.mission_title,
+  bookTitle: row.book_title,
+  answer: row.answer,
+  status: row.status,
+  score: row.score,
+  teacherFeedback: row.teacher_feedback,
+  submittedAt: row.submitted_at,
+  isPublic: row.is_public,
+}));
+    
     return (
       <main className="min-h-screen bg-[#faf8f3] text-[#26334a]">
         <Header />
@@ -518,183 +557,21 @@ setTeacherRows((current) =>
             Добро пожаловать, {profile.full_name}!
           </p>
 
-          <div className="mt-9 grid gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl border border-[#eee3d3] bg-white p-6">
-              <p className="text-sm text-slate-500">Всего работ</p>
-              <p className="mt-2 text-4xl font-bold">
-                {teacherRows.length}
-              </p>
-            </div>
+          
+<SubmissionReviewPanel
+  items={reviewItems}
+  onSave={saveReviewFromPanel}
+  onRefresh={loadTeacherSubmissions}
+onTogglePublication={async (id) => {
+  const row = teacherRows.find((item) => item.id === id);
 
-            <div className="rounded-2xl border border-[#eee3d3] bg-white p-6">
-              <p className="text-sm text-slate-500">Ожидают проверки</p>
-              <p className="mt-2 text-4xl font-bold text-amber-700">
-                {pendingCount}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-[#eee3d3] bg-white p-6">
-              <p className="text-sm text-slate-500">Проверено</p>
-              <p className="mt-2 text-4xl font-bold text-green-700">
-                {approvedCount}
-              </p>
-            </div>
-          </div>
-
-          <section className="mt-12">
-            <p className="text-sm font-bold tracking-widest text-amber-700">
-              РАБОТЫ УЧЕНИКОВ
-            </p>
-
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-2xl font-bold">
-                Проверка читательских миссий
-              </h2>
-
-              <button
-                onClick={loadTeacherSubmissions}
-                className="rounded-full border border-[#e5ddcf] bg-white px-5 py-2 text-sm font-semibold hover:bg-amber-50"
-              >
-                Обновить список
-              </button>
-            </div>
-
-            {teacherMessage && (
-              <p className="mt-5 rounded-xl bg-green-50 p-4 text-sm text-green-700">
-                {teacherMessage}
-              </p>
-            )}
-
-            {teacherRows.length === 0 ? (
-              <div className="mt-6 rounded-2xl border border-[#eee3d3] bg-white p-8 text-center text-slate-500">
-                Пока нет отправленных работ.
-              </div>
-            ) : (
-              <div className="mt-6 space-y-6">
-                {teacherRows.map((row) => (
-                  <article
-                    key={row.id}
-                    className="rounded-2xl border border-[#eee3d3] bg-white p-6"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-bold text-amber-700">
-                          {row.book_title}
-                        </p>
-
-                        <h3 className="mt-2 text-xl font-bold">
-                          {row.mission_title}
-                        </h3>
-
-                        <p className="mt-2 text-slate-600">
-                          Ученик: {row.student_name}
-                        </p>
-
-<div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#faf8f3] p-4">
-  <div>
-    <p className="font-semibold">Публикация работы</p>
-    <p className="mt-1 text-sm text-slate-500">
-      {row.is_public
-        ? "Работа видна всем посетителям сайта"
-        : "Работа доступна только авторизованным пользователям"}
-    </p>
-  </div>
-
-  <button
-    onClick={() => togglePublication(row)}
-    className={`rounded-full px-5 py-2 text-sm font-semibold ${
-      row.is_public
-        ? "bg-green-100 text-green-800"
-        : "bg-slate-200 text-slate-700"
-    }`}
-  >
-    {row.is_public ? "Опубликовано" : "Опубликовать"}
-  </button>
-</div>
-
-
-                        <p className="mt-1 text-xs text-slate-400">
-                          Отправлено:{" "}
-                          {new Date(row.submitted_at).toLocaleString("ru-RU")}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                          row.status === "approved"
-                            ? "bg-green-100 text-green-800"
-                            : "bg-amber-100 text-amber-800"
-                        }`}
-                      >
-                        {row.status === "approved"
-                          ? "Проверено"
-                          : "Ожидает проверки"}
-                      </span>
-                    </div>
-
-                    <div className="mt-6 rounded-xl bg-[#faf8f3] p-5">
-                      <p className="text-xs font-bold text-slate-500">
-                        ОТВЕТ УЧЕНИКА
-                      </p>
-                      <p className="mt-3 whitespace-pre-wrap leading-7">
-                        {row.answer}
-                      </p>
-                    </div>
-
-                    <div className="mt-6 grid gap-5 md:grid-cols-[180px_1fr]">
-                      <div>
-                        <label className="text-sm font-bold">
-                          Баллы (0–10)
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="10"
-                          step="1"
-                          value={row.scoreDraft}
-                          onChange={(e) =>
-                            updateDraft(row.id, "scoreDraft", e.target.value)
-                          }
-                          placeholder="Например, 9"
-                          className="mt-2 w-full rounded-xl border border-[#e5ddcf] bg-white p-3 outline-none focus:border-amber-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-sm font-bold">
-                          Комментарий учителя
-                        </label>
-                        <textarea
-                          rows={3}
-                          value={row.feedbackDraft}
-                          onChange={(e) =>
-                            updateDraft(
-                              row.id,
-                              "feedbackDraft",
-                              e.target.value
-                            )
-                          }
-                          placeholder="Напишите комментарий ученику..."
-                          className="mt-2 w-full rounded-xl border border-[#e5ddcf] bg-white p-3 outline-none focus:border-amber-500"
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => saveReview(row)}
-                      disabled={savingId === row.id}
-                      className="mt-6 w-full rounded-full bg-[#26334a] px-6 py-4 font-semibold text-white transition hover:bg-[#354766] disabled:opacity-50"
-                    >
-                      {savingId === row.id
-                        ? "Сохраняем..."
-                        : "Сохранить проверку"}
-                    </button>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        </section>
+  if (!row) {
+    throw new Error("Работа не найдена.");
+  }
+  await togglePublication(row);
+}}
+/>
+</section>
       </main>
     );
   }
@@ -822,7 +699,6 @@ setTeacherRows((current) =>
     )}
   </div>
 </section>
-
 </p>
         </h1>
 
