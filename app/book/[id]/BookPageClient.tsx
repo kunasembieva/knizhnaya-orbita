@@ -243,6 +243,14 @@ export default function BookPageClient({ bookId }: { bookId: string }) {
                       {submission.status === "approved" ? "Работа просмотрена" : "Работа отправлена"}
                     </span>
                   </div>
+                  <div className="mt-5 rounded-xl bg-white p-4">
+  <p className="text-sm font-bold text-amber-700">
+    МОЙ ОТПРАВЛЕННЫЙ ОТВЕТ
+  </p>
+  <p className="mt-2 whitespace-pre-wrap leading-7 text-[#26334a]">
+    {submission.answer || "Текст ответа не найден."}
+  </p>
+</div>
                   {submission.teacher_feedback && (
                     <div className="mt-5 rounded-xl bg-white p-4">
                       <p className="text-sm font-bold text-amber-700">КОММЕНТАРИЙ УЧИТЕЛЯ</p>
