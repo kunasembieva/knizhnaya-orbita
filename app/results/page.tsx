@@ -9,7 +9,6 @@ type PublicSubmission = {
   book_title: string;
   mission_title: string;
   answer: string;
-  score: number | null;
   teacher_feedback: string | null;
   status: string;
   submitted_at: string;
@@ -98,13 +97,9 @@ export default function PublicResultsPage() {
                   </p>
                 </div>
 
-                <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-lg font-bold">
-                    Оценка: {item.score ?? "—"} / 10
-                  </p>
-
+                <div className="mt-5">
                   <span className="rounded-full bg-green-100 px-4 py-2 text-sm font-semibold text-green-800">
-                    Проверено
+                    Работа просмотрена
                   </span>
                 </div>
 

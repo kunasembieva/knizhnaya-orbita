@@ -47,6 +47,7 @@ type TeacherSubmission = {
   book_title: string;
   scoreDraft: string;
   feedbackDraft: string;
+  fileLinks: { name: string; url: string }[];
 };
 
 export default function CabinetPage() {
@@ -54,6 +55,7 @@ export default function CabinetPage() {
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [books, setBooks] = useState<Book[]>([]);
+  const [expandedResults, setExpandedResults] = useState<string[]>([]);
   const [submissionCount, setSubmissionCount] = useState(0);
   const [studentResults, setStudentResults] = useState<StudentResult[]>([]);
   const completedBooks = new Set(
@@ -70,11 +72,6 @@ const earnedBookTitles = new Set(
 const completedTasks = studentResults.filter(
   (result) => result.status === "approved"
 ).length;
-
-const totalPoints = studentResults.reduce(
-  (sum, result) => sum + (result.score ?? 0),
-  0
-);
 
 const achievements = [
   completedBooks >= 1 ? "Первое книжное открытие" : null,
@@ -240,7 +237,7 @@ if (submissionsError) {
       await supabase
         .from("submissions")
         .select(
-          "id, student_id, mission_id, answer, status, score, teacher_feedback, submitted_at, is_public"
+          "id, student_id, mission_id, answer, status, score, teacher_feedback, submitted_at, is_public, file_paths"
         )
         .order("submitted_at", { ascending: false });
 
@@ -308,6 +305,21 @@ if (submissionsError) {
       }
     }
 
+    const fileLinksBySubmission = new Map<string, { name: string; url: string }[]>();
+    for (const item of submissions) {
+      const paths = (item.file_paths || []) as string[];
+      const links: { name: string; url: string }[] = [];
+      for (const path of paths) {
+        const { data: signed } = await supabase.storage
+          .from("student-submissions")
+          .createSignedUrl(path, 60 * 60);
+        if (signed?.signedUrl) {
+          links.push({ name: path.split("/").pop() || "Файл ученика", url: signed.signedUrl });
+        }
+      }
+      fileLinksBySubmission.set(item.id, links);
+    }
+
     const result: TeacherSubmission[] = submissions.map((item) => {
       const student = (profilesData || []).find(
         (p) => p.id === item.student_id
@@ -337,6 +349,7 @@ if (submissionsError) {
   scoreDraft:
     item.score === null ? "" : String(item.score),
   feedbackDraft: item.teacher_feedback || "",
+  fileLinks: fileLinksBySubmission.get(item.id) || [],
 };
     });
 
@@ -389,44 +402,24 @@ async function togglePublication(row: TeacherSubmission) {
 async function saveReview(
   row: TeacherSubmission
 ): Promise<boolean> {
-  const score = Number(row.scoreDraft);
-
-  if (
-    row.scoreDraft.trim() === "" ||
-    !Number.isInteger(score) ||
-    score < 0 ||
-    score > 10
-  ) {
-    setTeacherMessage("Укажите целое число от 0 до 10 баллов.");
-    return false;
-  }
-
   setSavingId(row.id);
   setTeacherMessage("");
 
   const { data: updatedRow, error: updateError } = await supabase
     .from("submissions")
     .update({
-      score,
       teacher_feedback: row.feedbackDraft.trim(),
       status: "approved",
       reviewed_at: new Date().toISOString(),
     })
     .eq("id", row.id)
-    .select("id, score, teacher_feedback, status")
+    .select("id, teacher_feedback, status")
     .maybeSingle();
 
-  if (updateError) {
-    console.error("Ошибка сохранения проверки:", updateError);
-    setTeacherMessage("Ошибка сохранения: " + updateError.message);
-    setSavingId(null);
-    return false;
-  }
-
-  if (!updatedRow) {
-    console.error("Запись не обновлена. ID:", row.id);
+  if (updateError || !updatedRow) {
+    console.error("Ошибка сохранения комментария:", updateError);
     setTeacherMessage(
-      "Запись не обновлена. Проверьте права доступа UPDATE."
+      updateError?.message || "Не удалось сохранить комментарий. Проверьте права доступа."
     );
     setSavingId(null);
     return false;
@@ -435,26 +428,19 @@ async function saveReview(
   setTeacherRows((current) =>
     current.map((item) =>
       item.id === row.id
-        ? {
-            ...item,
-            score,
-            status: "approved",
-            teacher_feedback: row.feedbackDraft.trim(),
-          }
+        ? { ...item, status: "approved", teacher_feedback: row.feedbackDraft.trim() }
         : item
     )
   );
 
-  setTeacherMessage("Проверка успешно сохранена!");
+  setTeacherMessage("Комментарий сохранён!");
   setSavingId(null);
-
   return true;
 }
 
 
 async function saveReviewFromPanel(
   id: string,
-  score: number,
   feedback: string
 ) {
   const row = teacherRows.find((item) => item.id === id);
@@ -465,7 +451,6 @@ async function saveReviewFromPanel(
 
   const success = await saveReview({
     ...row,
-    scoreDraft: String(score),
     feedbackDraft: feedback,
   });
 
@@ -534,10 +519,10 @@ async function saveReviewFromPanel(
   bookTitle: row.book_title,
   answer: row.answer,
   status: row.status,
-  score: row.score,
   teacherFeedback: row.teacher_feedback,
   submittedAt: row.submitted_at,
   isPublic: row.is_public,
+  fileLinks: row.fileLinks,
 }));
     
     return (
@@ -604,155 +589,168 @@ onTogglePublication={async (id) => {
     <main className="min-h-screen bg-[#faf8f3] text-[#26334a]">
       <Header />
 
-      <section className="mx-auto max-w-6xl px-6 py-12">
-        <p className="text-sm font-bold tracking-widest text-amber-700">
-          ЛИЧНОЕ ПРОСТРАНСТВО
-        </p>
+      
+<section className="mx-auto max-w-6xl px-6 py-12">
 
-        <h1 className="mt-3 text-3xl font-bold md:text-4xl">
-          Мой читательский мир
-          <p className="mt-3 text-slate-600">
-  Добро пожаловать, {profile.full_name}!
-
-<section className="mt-8 rounded-3xl border border-[#eee3d3] bg-white p-6 md:p-8">
-  <p className="text-sm font-bold tracking-widest text-amber-700">
-    МОИ ДОСТИЖЕНИЯ
-  </p>
-
-  <h2 className="mt-2 text-2xl font-bold">
-    Мой читательский прогресс
-  </h2>
-
-  <p className="mt-2 text-slate-500">
-    Каждый прочитанный рассказ приближает тебя к новым открытиям!
-  </p>
-
-  <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    <div className="rounded-2xl bg-[#faf8f3] p-5">
-      <p className="text-sm text-slate-500">Книги проекта</p>
-      <p className="mt-2 text-3xl font-bold">
-        {completedBooks} / 9
-      </p>
+  {/* Приветствие */}
+  <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#25204f] via-[#34316f] to-[#5368a8] p-7 text-white shadow-xl md:p-10">
+    <div className="pointer-events-none absolute right-8 top-5 text-5xl opacity-30">
+      ✦
+    </div>
+    <div className="pointer-events-none absolute bottom-5 right-1/3 text-3xl text-sky-200 opacity-70">
+      ✧
     </div>
 
-    <div className="rounded-2xl bg-[#faf8f3] p-5">
-      <p className="text-sm text-slate-500">Выполнено заданий</p>
-      <p className="mt-2 text-3xl font-bold">
-        {completedTasks}
-      </p>
-    </div>
+    <p className="text-xs font-bold tracking-[0.25em] text-amber-300">
+      ✦ ЛИЧНОЕ ПРОСТРАНСТВО
+    </p>
 
-    <div className="rounded-2xl bg-[#faf8f3] p-5">
-      <p className="text-sm text-slate-500">Набрано баллов</p>
-      <p className="mt-2 text-3xl font-bold">
-        {totalPoints}
-      </p>
-    </div>
+    <h1 className="mt-4 text-3xl font-bold md:text-4xl">
+      Мой читательский мир
+    </h1>
 
-    <div className="rounded-2xl bg-[#faf8f3] p-5">
-      <p className="text-sm text-slate-500">Достижения</p>
-      <p className="mt-2 text-3xl font-bold">
-        {achievements.length}
-      </p>
-    </div>
-  </div>
+    <p className="mt-3 text-lg text-sky-100">
+      Добро пожаловать, {profile.full_name}!
+    </p>
 
-  <div className="mt-8">
-    <div className="flex justify-between gap-3">
-      <p className="font-bold">Мой путь читателя</p>
-      <p className="text-sm font-semibold text-amber-700">
-        {Math.round((completedBooks / 9) * 100)}%
-      </p>
-    </div>
-
-    <div className="mt-3 h-3 overflow-hidden rounded-full bg-[#eee9df]">
-      <div
-        className="h-full rounded-full bg-[#d5a64b] transition-all"
-        style={{
-          width: `${Math.min((completedBooks / 9) * 100, 100)}%`,
-        }}
-      />
-    </div>
-
-    <p className="mt-2 text-sm text-slate-500">
-      {completedBooks} из 9 книг проекта
+    <p className="mt-5 max-w-xl text-sm leading-6 text-indigo-100">
+      Твоя книжная вселенная ждёт новых открытий. Читай, выполняй миссии и собирай достижения!
     </p>
   </div>
-  <div className="mt-8">
-    <h3 className="text-lg font-bold">Мои награды</h3>
 
-    {achievements.length === 0 ? (
-      <p className="mt-3 text-sm text-slate-500">
-        Твои первые награды ещё впереди. Продолжай читать и выполнять миссии!
-      </p>
-    ) : (
-      <div className="mt-4 flex flex-wrap gap-3">
-        {achievements.map((achievement) => (
-          <span
-            key={achievement}
-            className="rounded-full bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800"
-          >
-            ✦ {achievement}
-          </span>
-        ))}
-      </div>
-    )}
-  </div>
-</section>
-</p>
-        </h1>
+  {/* Мой читательский прогресс */}
+  <section className="mt-8 rounded-3xl border border-violet-100 bg-white p-6 shadow-lg md:p-8">
 
-        <p className="mt-3 text-slate-600">
-          Добро пожаловать, {profile.full_name}!
+    <p className="text-sm font-bold tracking-widest text-violet-600">
+      ✦ МОИ ДОСТИЖЕНИЯ
+    </p>
+
+    <h2 className="mt-2 text-2xl font-bold text-[#26334a]">
+      Мой читательский прогресс
+    </h2>
+
+    <p className="mt-2 text-slate-500">
+      Каждый прочитанный рассказ приближает тебя к новым открытиям!
+    </p>
+
+    <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+
+      <div className="rounded-2xl bg-sky-50 p-5">
+        <span className="text-2xl">📚</span>
+        <p className="mt-3 text-sm text-slate-500">Книги проекта</p>
+        <p className="mt-1 text-3xl font-bold text-blue-700">
+          {completedBooks} / 9
         </p>
+      </div>
 
-        <div className="mt-9 grid gap-4 sm:grid-cols-3">
-          <div className="rounded-2xl border border-[#eee3d3] bg-white p-6">
-            <p className="text-sm text-slate-500">Книги в путешествии</p>
-            <p className="mt-2 text-4xl font-bold">{books.length} / 9</p>
-          </div>
+      <div className="rounded-2xl bg-violet-50 p-5">
+        <span className="text-2xl">✍️</span>
+        <p className="mt-3 text-sm text-slate-500">Выполнено заданий</p>
+        <p className="mt-1 text-3xl font-bold text-violet-700">
+          {completedTasks}
+        </p>
+      </div>
 
-          <div className="rounded-2xl border border-[#eee3d3] bg-white p-6">
-            <p className="text-sm text-slate-500">Отправлено работ</p>
-            <p className="mt-2 text-4xl font-bold">
-              {submissionCount}
-            </p>
-          </div>
+      <div className="rounded-2xl bg-pink-50 p-5">
+        <span className="text-2xl">🚀</span>
+        <p className="mt-3 text-sm text-slate-500">Отправлено работ</p>
+        <p className="mt-1 text-3xl font-bold text-pink-700">
+          {submissionCount}
+        </p>
+      </div>
 
-          <div className="rounded-2xl border border-[#eee3d3] bg-white p-6">
-            <p className="text-sm text-slate-500">Учебный год</p>
-            <p className="mt-2 text-3xl font-bold">2026–2027</p>
-          </div>
+      <div className="rounded-2xl bg-amber-50 p-5">
+        <span className="text-2xl">🏆</span>
+        <p className="mt-3 text-sm text-slate-500">Достижения</p>
+        <p className="mt-1 text-3xl font-bold text-amber-700">
+          {achievements.length}
+        </p>
+      </div>
+
+    </div>
+
+    <div className="mt-8 rounded-2xl bg-gradient-to-r from-violet-50 to-sky-50 p-5">
+
+      <div className="flex justify-between gap-3">
+        <p className="font-bold text-[#26334a]">
+          🪐 Мой путь читателя
+        </p>
+        <p className="font-bold text-violet-700">
+          {Math.round((completedBooks / 9) * 100)}%
+        </p>
+      </div>
+
+      <div className="mt-4 h-4 overflow-hidden rounded-full bg-white">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-violet-500 to-sky-400 transition-all"
+          style={{
+            width: `${Math.min((completedBooks / 9) * 100, 100)}%`,
+          }}
+        />
+      </div>
+
+      <p className="mt-3 text-sm text-slate-500">
+        {completedBooks} из 9 книг проекта
+      </p>
+
+    </div>
+
+    <div className="mt-8">
+      <h3 className="text-lg font-bold text-[#26334a]">
+        🏅 Мои награды
+      </h3>
+
+      {achievements.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">
+          Твои первые награды ещё впереди. Продолжай читать и выполнять миссии!
+        </p>
+      ) : (
+        <div className="mt-4 flex flex-wrap gap-3">
+          {achievements.map((achievement) => (
+            <span
+              key={achievement}
+              className="rounded-full border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800"
+            >
+              ✦ {achievement}
+            </span>
+          ))}
         </div>
+      )}
+    </div>
+
+  </section>
+
 
 <section className="mt-12">
-  <p className="text-sm font-bold tracking-widest text-amber-700">
-    МОЯ КОЛЛЕКЦИЯ
-  </p>
+  <div className="text-center md:text-left">
+    <p className="text-sm font-bold tracking-widest text-violet-600">
+      ✦ МОЯ КОЛЛЕКЦИЯ
+    </p>
 
-  <h2 className="mt-2 text-2xl font-bold">
-    9 читательских значков
-  </h2>
+    <h2 className="mt-2 text-2xl font-bold text-[#26334a]">
+      9 читательских значков
+    </h2>
 
-  <p className="mt-2 text-slate-500">
-    Выполняй задания по каждой книге и собирай свою коллекцию!
-  </p>
+    <p className="mt-2 text-slate-500">
+      Выполняй задания по каждой книге и собирай свою коллекцию!
+    </p>
+  </div>
 
   {(() => {
     const badges = [
-      { title: "Первый читатель", emoji: "📖" },
-      { title: "Книжный детектив", emoji: "🔍" },
-      { title: "Мастер слова", emoji: "✍️" },
-      { title: "Генератор идей", emoji: "💡" },
-      { title: "Театральный герой", emoji: "🎭" },
-      { title: "Знаток литературы", emoji: "🌟" },
-      { title: "Исследователь", emoji: "🧭" },
-      { title: "Мастер чтения", emoji: "🏆" },
-      { title: "Легенда орбиты", emoji: "👑" },
+      { title: "Первый читатель", emoji: "📖", color: "from-sky-100 to-blue-200" },
+      { title: "Книжный детектив", emoji: "🔍", color: "from-emerald-100 to-teal-200" },
+      { title: "Мастер слова", emoji: "✍️", color: "from-pink-100 to-rose-200" },
+      { title: "Генератор идей", emoji: "💡", color: "from-amber-100 to-orange-200" },
+      { title: "Театральный герой", emoji: "🎭", color: "from-indigo-100 to-violet-200" },
+      { title: "Знаток литературы", emoji: "🌟", color: "from-yellow-100 to-amber-200" },
+      { title: "Исследователь", emoji: "🧭", color: "from-cyan-100 to-sky-200" },
+      { title: "Мастер чтения", emoji: "🏆", color: "from-orange-100 to-amber-200" },
+      { title: "Легенда орбиты", emoji: "👑", color: "from-purple-100 to-fuchsia-200" },
     ];
 
     return (
-      <div className="mt-6 grid grid-cols-3 gap-3 md:grid-cols-5 lg:grid-cols-9">
+      <div className="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-3">
         {badges.map((badge, index) => {
           const book = books[index];
           const earned = book
@@ -762,27 +760,33 @@ onTogglePublication={async (id) => {
           return (
             <div
               key={index}
-              className={`rounded-2xl border p-3 text-center ${
+              className={`group relative overflow-hidden rounded-3xl border p-5 text-center transition duration-300 hover:-translate-y-1 hover:shadow-lg ${
                 earned
-                  ? "border-amber-300 bg-amber-50"
-                  : "border-[#eee3d3] bg-white opacity-50"
+                  ? "border-violet-200 bg-white shadow-md"
+                  : "border-slate-200 bg-slate-50"
               }`}
             >
-              <div className="text-3xl">
+              <div className="absolute right-3 top-2 text-2xl text-violet-200">
+                {index + 1}
+              </div>
+
+              <div className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br ${badge.color} text-4xl shadow-inner transition duration-300 group-hover:scale-110 ${
+                earned ? "" : "grayscale opacity-50"
+              }`}>
                 {earned ? badge.emoji : "🔒"}
               </div>
 
-              <p className="mt-2 text-xs font-bold">
-                {String(index + 1).padStart(2, "0")}
-              </p>
-
-              <p className="mt-1 text-xs font-semibold">
+              <p className="mt-4 text-sm font-bold text-[#26334a]">
                 {badge.title}
               </p>
 
-              <p className="mt-2 text-[10px] text-slate-500">
-                {earned ? "Получен" : "Закрыт"}
-              </p>
+              <div className={`mx-auto mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                earned
+                  ? "bg-violet-100 text-violet-700"
+                  : "bg-slate-200 text-slate-500"
+              }`}>
+                {earned ? "✓ Получен" : "🔒 Закрыт"}
+              </div>
             </div>
           );
         })}
@@ -791,147 +795,256 @@ onTogglePublication={async (id) => {
   })()}
 </section>
 
-        <section className="mt-12">
-          <p className="text-sm font-bold tracking-widest text-amber-700">
-            ТВОЯ БИБЛИОТЕКА
-          </p>
-          <h2 className="mt-2 text-2xl font-bold">
-            Девять книг — девять открытий
-          </h2>
 
-          {books.length === 0 ? (
-            <p className="mt-6 rounded-2xl bg-white p-6 text-slate-600">
-              Книги пока не загружены. Проверьте доступ к библиотеке.
-            </p>
-          ) : (
-            <div className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {books.map((book) => (
-                <button
-                  key={book.id}
-                  onClick={() => router.push(`/book/${book.id}`)}
-                  className="w-full overflow-hidden rounded-2xl border border-[#eee3d3] bg-white text-left transition hover:-translate-y-1 hover:shadow-lg"
-                >
-                  <div className="flex h-64 items-center justify-center bg-[#fff2cf] p-5">
-                    {book.cover_url ? (
-                      <img
-                        src={book.cover_url}
-                        alt={`Обложка книги ${book.title}`}
-                        className="h-full w-full object-contain"
-                      />
-                    ) : (
-                      <span className="text-5xl">✦</span>
-                    )}
-                  </div>
+        
+<section className="mt-12">
+  <div className="text-center md:text-left">
+    <p className="text-sm font-bold tracking-widest text-violet-600">
+      ✦ МОЯ КНИЖНАЯ ВСЕЛЕННАЯ
+    </p>
 
-                  <div className="p-5">
-                    <p className="text-xs font-bold tracking-widest text-amber-700">
-                      {book.month_name} ·{" "}
-                      {String(book.month_number).padStart(2, "0")} / 09
-                    </p>
+    <h2 className="mt-2 text-2xl font-bold text-[#26334a]">
+      Девять книг — девять открытий
+    </h2>
 
-                    <h3 className="mt-3 text-lg font-bold">
-                      {book.title}
-                    </h3>
+    <p className="mt-2 text-slate-500">
+      Каждая книга — новая планета твоего литературного путешествия.
+    </p>
+  </div>
 
-                    <p className="mt-2 text-sm text-slate-500">
-                      {book.author}
-                    </p>
+  {books.length === 0 ? (
+    <p className="mt-6 rounded-2xl bg-white p-6 text-slate-600">
+      Книги пока не загружены. Проверьте доступ к библиотеке.
+    </p>
+  ) : (
+    <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      {books.map((book, index) => {
+        const planetColors = [
+          "from-blue-200 via-blue-500 to-indigo-950",
+          "from-emerald-200 via-teal-500 to-emerald-950",
+          "from-pink-200 via-pink-500 to-rose-950",
+          "from-amber-200 via-orange-400 to-orange-950",
+          "from-sky-200 via-blue-500 to-blue-950",
+          "from-purple-200 via-violet-500 to-purple-950",
+          "from-teal-200 via-cyan-500 to-teal-950",
+          "from-orange-200 via-orange-500 to-orange-950",
+          "from-violet-200 via-indigo-500 to-indigo-950",
+        ];
 
-                    {book.description && (
-                      <p className="mt-3 text-sm leading-6 text-slate-600">
-                        {book.description}
-                      </p>
-                    )}
-                  </div>
-                </button>
-              ))}
+        return (
+          <button
+            key={book.id}
+            onClick={() => router.push(`/book/${book.id}`)}
+            className="group w-full overflow-hidden rounded-3xl border border-violet-100 bg-white p-5 text-left shadow-md transition duration-300 hover:-translate-y-2 hover:border-violet-300 hover:shadow-xl"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold tracking-widest text-violet-600">
+                {book.month_name}
+              </span>
+              <span className="text-sm font-bold text-violet-300">
+                {book.month_number} / 9
+              </span>
             </div>
-          )}
-        </section>
+
+            <div className={`relative mx-auto mt-6 flex h-60 w-60 max-w-full items-center justify-center overflow-hidden rounded-full bg-gradient-to-br ${planetColors[index % 9]} shadow-[0_0_28px_rgba(139,92,246,0.25)] transition duration-500 group-hover:scale-105`}>
+              <div className="absolute inset-3 rounded-full border border-white/30" />
+              <div className="absolute right-8 top-8 h-3 w-3 rounded-full bg-white/60 blur-[1px]" />
+
+              {book.cover_url ? (
+                <img
+                  src={book.cover_url}
+                  alt={`Обложка книги ${book.title}`}
+                  className="relative z-10 h-[82%] w-[70%] rounded-lg bg-white p-1 object-contain shadow-xl"
+                />
+              ) : (
+                <span className="relative z-10 text-5xl text-white">
+                  ✦
+                </span>
+              )}
+            </div>
+
+            <div className="mt-6">
+              <h3 className="text-lg font-bold text-[#26334a] transition group-hover:text-violet-700">
+                {book.title}
+              </h3>
+
+              <p className="mt-2 text-sm text-slate-500">
+                {book.author}
+              </p>
+
+              {book.description && (
+                <p className="mt-3 text-sm leading-6 text-slate-600">
+                  {book.description}
+                </p>
+              )}
+
+              <div className="mt-5 rounded-xl bg-gradient-to-r from-violet-50 to-sky-50 px-4 py-3 text-center text-sm font-semibold text-violet-700">
+                Открыть книгу →
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  )}
+</section>
 
 
 <section className="mt-12">
-  <p className="text-sm font-bold tracking-widest text-amber-700">
-    МОИ ДОСТИЖЕНИЯ
-  </p>
-
-  <h2 className="mt-2 text-2xl font-bold">
-    Мои результаты
-  </h2>
+  <div>
+    <p className="text-sm font-bold tracking-widest text-violet-600">
+      ✦ МОИ ДОСТИЖЕНИЯ
+    </p>
+    <h2 className="mt-2 text-2xl font-bold text-[#26334a]">
+      Мои работы и отзывы
+    </h2>
+    <p className="mt-2 text-slate-500">
+      Здесь хранится история твоих читательских открытий.
+    </p>
+  </div>
 
   {studentResults.length === 0 ? (
-    <div className="mt-6 rounded-2xl bg-white p-6 text-slate-500">
-      Пока нет отправленных работ.
+    <div className="mt-6 rounded-3xl border border-violet-100 bg-white p-8 text-center shadow-sm">
+      <div className="text-4xl">📚</div>
+      <p className="mt-3 font-semibold text-[#26334a]">
+        Пока нет отправленных работ
+      </p>
+      <p className="mt-2 text-sm text-slate-500">
+        Выполни первую миссию и здесь появится твой результат!
+      </p>
     </div>
   ) : (
-    <div className="mt-6 space-y-5">
+    <div className="mt-7 space-y-5">
       {studentResults.map((result) => (
         <article
           key={result.id}
-          className="rounded-2xl border border-[#eee3d3] bg-white p-6"
+          className="group overflow-hidden rounded-3xl border border-violet-100 bg-white shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-lg"
         >
-          <p className="text-sm font-bold text-amber-700">
-            {result.book_title}
-          </p>
+          <div className="bg-gradient-to-r from-violet-50 via-white to-sky-50 p-6 md:p-7">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="inline-flex rounded-full bg-violet-100 px-4 py-2 text-xs font-bold text-violet-700">
+                📖 {result.book_title}
+              </span>
+              <span className="text-sm font-semibold text-violet-300">
+                ✦ Моя работа
+              </span>
+            </div>
 
-          <h3 className="mt-2 text-lg font-bold">
-            {result.mission_title}
-          </h3>
+            <h3 className="mt-4 text-xl font-bold text-[#26334a]">
+              {result.mission_title}
+            </h3>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <span className="rounded-full bg-[#faf8f3] px-4 py-2 text-sm">
-              {result.score === null
-                ? "Баллы пока не выставлены"
-                : `Оценка: ${result.score} / 10`}
-            </span>
-
-            <span className={`rounded-full px-4 py-2 text-sm font-semibold ${
-              result.status === "approved"
-                ? "bg-green-100 text-green-800"
-                : result.status === "needs_revision"
-                ? "bg-amber-100 text-amber-800"
-                : "bg-slate-100 text-slate-600"
-            }`}>
-              {result.status === "approved"
-                ? "Проверено"
-                : result.status === "needs_revision"
-                ? "Нужна доработка"
-                : "Ожидает проверки"}
-            </span>
+            <div className="mt-5">
+              <span className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold ${
+                result.status === "approved"
+                  ? "bg-green-100 text-green-800"
+                  : result.status === "needs_revision"
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-sky-100 text-sky-800"
+              }`}>
+                {result.status === "approved"
+                  ? "✓ Работа просмотрена"
+                  : result.status === "needs_revision"
+                  ? "↻ Нужна доработка"
+                  : "◷ Ожидает проверки"}
+              </span>
+            </div>
           </div>
+          <div className="mt-5">
+  <button
+    type="button"
+    onClick={() =>
+      setExpandedResults((prev) =>
+        prev.includes(result.id)
+          ? prev.filter((id) => id !== result.id)
+          : [...prev, result.id]
+      )
+    }
+    className="inline-flex items-center gap-2 rounded-xl bg-violet-100 px-5 py-3 text-sm font-semibold text-violet-700 transition hover:bg-violet-200"
+  >
+    {expandedResults.includes(result.id)
+      ? "Скрыть мою работу ↑"
+      : "Посмотреть мою работу ↓"}
+  </button>
+
+  {expandedResults.includes(result.id) && (
+    <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/70 p-5">
+      <p className="text-xs font-bold tracking-wider text-violet-700">
+        МОЯ ОТПРАВЛЕННАЯ РАБОТА
+      </p>
+
+      <p className="mt-3 whitespace-pre-wrap leading-7 text-[#34415c]">
+        {result.answer || "Текст работы не найден."}
+      </p>
+    </div>
+  )}
+</div>
 
           {result.teacher_feedback && (
-            <div className="mt-5 rounded-xl bg-[#faf8f3] p-5">
-              <p className="text-xs font-bold text-slate-500">
-                КОММЕНТАРИЙ УЧИТЕЛЯ
-              </p>
-              <p className="mt-2 leading-7">
+            <div className="mx-5 mb-5 mt-2 rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-sky-50 p-5 md:mx-7">
+              <div className="flex items-center gap-2">
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-lg shadow-sm">
+                  💬
+                </span>
+                <p className="text-xs font-bold tracking-wider text-violet-700">
+                  ОТЗЫВ УЧИТЕЛЯ
+                </p>
+              </div>
+              <p className="mt-3 leading-7 text-[#34415c]">
                 {result.teacher_feedback}
               </p>
             </div>
           )}
 
-          <p className="mt-4 text-xs text-slate-400">
-            Отправлено:{" "}
-            {new Date(result.submitted_at).toLocaleString("ru-RU")}
-          </p>
+          <div className="px-6 pb-5 md:px-7">
+            <div className="border-t border-slate-100 pt-4">
+              <p className="text-xs text-slate-400">
+                <span className="mr-1">🕒</span>
+                Отправлено:{" "}
+                {new Date(result.submitted_at).toLocaleString("ru-RU")}
+              </p>
+            </div>
+          </div>
         </article>
       ))}
     </div>
   )}
 </section>
 
-        <section className="mt-12 rounded-3xl bg-[#26334a] p-8 text-white">
-          <p className="text-sm font-bold tracking-widest text-amber-300">
-            ТВОЁ ЧИТАТЕЛЬСКОЕ ПУТЕШЕСТВИЕ
-          </p>
-          <h2 className="mt-3 text-2xl font-bold">
-            Каждая книга — новое открытие!
-          </h2>
-          <p className="mt-3 leading-7 text-slate-200">
-            Читай, исследуй, выполняй миссии и собирай свою историю достижений.
-          </p>
-        </section>
+<section className="relative mt-12 overflow-hidden rounded-3xl bg-gradient-to-br from-[#211b50] via-[#34316f] to-[#5268a8] p-8 text-white shadow-xl md:p-10">
+  {/* Декоративные звёзды */}
+  <div className="pointer-events-none absolute right-8 top-5 text-6xl text-white/20">
+    ✦
+  </div>
+  <div className="pointer-events-none absolute bottom-5 right-1/3 text-4xl text-sky-200/40">
+    ✧
+  </div>
+  <div className="pointer-events-none absolute right-20 top-1/2 h-24 w-24 rounded-full border border-white/10" />
+
+  <div className="relative z-10 max-w-2xl">
+    <p className="text-sm font-bold tracking-[0.2em] text-amber-300">
+      ✦ ТВОЁ ЧИТАТЕЛЬСКОЕ ПУТЕШЕСТВИЕ
+    </p>
+
+    <h2 className="mt-4 text-2xl font-bold leading-tight md:text-3xl">
+      Каждая книга — новое открытие!
+    </h2>
+
+    <p className="mt-4 leading-7 text-indigo-100">
+      Читай, исследуй, выполняй миссии и собирай свою историю достижений.
+      Пусть каждая прочитанная книга открывает тебе новую вселенную знаний,
+      фантазии и удивительных историй!
+    </p>
+
+    <div className="mt-7 flex items-center gap-3">
+      <span className="text-3xl">🚀</span>
+      <p className="text-sm font-semibold text-amber-200">
+        Твоё следующее открытие начинается с новой страницы!
+      </p>
+    </div>
+  </div>
+</section>
+
       </section>
     </main>
   );

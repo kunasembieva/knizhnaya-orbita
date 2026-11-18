@@ -11,17 +11,16 @@ export type ReviewItem = {
   answer?: string | null;
   filePath?: string | null;
   status?: string | null;
-  score?: number | null;
   teacherFeedback?: string | null;
   submittedAt?: string | null;
   isPublic?: boolean;
+  fileLinks?: { name: string; url: string }[];
 };
 
 type Props = {
   items: ReviewItem[];
   onSave: (
     id: string,
-    score: number,
     feedback: string
   ) => Promise<void>;
   onRefresh?: () => void;
@@ -39,7 +38,6 @@ export default function SubmissionReviewPanel({
   const [selected, setSelected] =
     useState<ReviewItem | null>(null);
 
-  const [score, setScore] = useState("10");
   const [feedback, setFeedback] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -84,38 +82,19 @@ export default function SubmissionReviewPanel({
 
   function openReview(item: ReviewItem) {
     setSelected(item);
-    setScore(String(item.score ?? 10));
     setFeedback(item.teacherFeedback ?? "");
     setError("");
   }
 
   async function saveReview() {
     if (!selected) return;
-
-    const numericScore = Number(score);
-
-    if (
-      !Number.isInteger(numericScore) ||
-      numericScore < 0 ||
-      numericScore > 10
-    ) {
-      setError("Введите целое число от 0 до 10.");
-      return;
-    }
-
     setSaving(true);
     setError("");
-
     try {
-      await onSave(selected.id, numericScore, feedback);
-
+      await onSave(selected.id, feedback);
       setSelected(null);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Не удалось сохранить проверку."
-      );
+      setError(err instanceof Error ? err.message : "Не удалось сохранить комментарий.");
     } finally {
       setSaving(false);
     }
@@ -170,7 +149,7 @@ export default function SubmissionReviewPanel({
           </p>
 
           <h2 className="mt-1 text-2xl font-bold">
-            Проверка читательских миссий
+            Комментарии к работам
           </h2>
         </div>
 
@@ -269,7 +248,7 @@ export default function SubmissionReviewPanel({
           <aside
             role="dialog"
             aria-modal="true"
-            aria-label="Проверка работы ученика"
+            aria-label="Работа ученика"
             onClick={e => e.stopPropagation()}
             className="absolute right-0 top-0 flex h-full w-full max-w-[620px] flex-col overflow-hidden bg-[#faf8f3] shadow-2xl"
           >
@@ -339,26 +318,25 @@ export default function SubmissionReviewPanel({
                 )}
               </div>
 
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold">
-                  Баллы (0–10)
-                </label>
+              {selected.fileLinks && selected.fileLinks.length > 0 && (
+                <div className="rounded-2xl bg-white p-5">
+                  <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Прикреплённые материалы
+                  </p>
+                  <ul className="space-y-2">
+                    {selected.fileLinks.map((file) => (
+                      <li key={file.url}>
+                        <a href={file.url} target="_blank" rel="noopener noreferrer" className="text-sm font-semibold text-amber-700 underline">
+                          📎 {file.name}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-                <input
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="1"
-                  value={score}
-                  onChange={e => setScore(e.target.value)}
-                  className="w-full rounded-xl border border-[#eee3d3] bg-white px-4 py-3 outline-none focus:border-[#26334a]"
-                />
-              </div>
-
               <div className="space-y-2">
-                <label className="block text-sm font-semibold">
-                  Комментарий учителя
-                </label>
+                <label className="block text-sm font-semibold">Комментарий учителя</label>
 
                 <textarea
                   rows={5}
@@ -409,7 +387,7 @@ export default function SubmissionReviewPanel({
               >
                 {saving
                   ? "Сохранение..."
-                  : "Сохранить проверку"}
+                  : "Сохранить комментарий"}
               </button>
 
               <button
