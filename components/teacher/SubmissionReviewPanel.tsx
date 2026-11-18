@@ -294,12 +294,7 @@ export default function SubmissionReviewPanel({
                   {selected.missionTitle}
                 </p>
 
-                <p className="mt-3 text-sm text-slate-500">
-                  Дата отправки
-                </p>
-                <p className="font-medium">
-                  {formatDate(selected.submittedAt)}
-                </p>
+    
               </div>
 
               <div className="rounded-2xl bg-white p-5">

@@ -114,10 +114,7 @@ export default function PublicResultsPage() {
                   </div>
                 )}
 
-                <p className="mt-4 text-xs text-slate-400">
-                  Дата отправки:{" "}
-                  {new Date(item.submitted_at).toLocaleDateString("ru-RU")}
-                </p>
+            
               </article>
             ))}
           </div>

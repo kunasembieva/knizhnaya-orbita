@@ -996,15 +996,6 @@ onTogglePublication={async (id) => {
             </div>
           )}
 
-          <div className="px-6 pb-5 md:px-7">
-            <div className="border-t border-slate-100 pt-4">
-              <p className="text-xs text-slate-400">
-                <span className="mr-1">🕒</span>
-                Отправлено:{" "}
-                {new Date(result.submitted_at).toLocaleString("ru-RU")}
-              </p>
-            </div>
-          </div>
         </article>
       ))}
     </div>

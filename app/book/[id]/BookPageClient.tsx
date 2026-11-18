@@ -155,17 +155,25 @@ export default function BookPageClient({ bookId }: { bookId: string }) {
       });
       setFiles([]);
       setMessage("Работа успешно отправлена!");
-    } catch (err) {
-      console.error(err);
-      setMessage(
-        err instanceof Error
-          ? `Не удалось отправить работу: ${err.message}`
-          : "Произошла ошибка при отправке работы."
-      );
-    } finally {
-      setSending(false);
-    }
+    
+} catch (err) {
+  console.error(err);
+
+  const errorCode = (err as { code?: string })?.code;
+
+  if (errorCode === "23505") {
+    setMessage("Ты уже отправил эту работу. Повторная отправка невозможна.");
+  } else {
+    setMessage(
+      err instanceof Error
+        ? `Не удалось отправить работу: ${err.message}`
+        : "Произошла ошибка при отправке работы."
+    );
   }
+} finally {
+  setSending(false);
+}
+
 
   if (loading) {
     return <main className="min-h-screen flex items-center justify-center bg-[#faf8f3]">Загружаем книгу...</main>;
@@ -243,42 +251,64 @@ export default function BookPageClient({ bookId }: { bookId: string }) {
                 </div>
               )}
 
-              <div className="mt-8">
-                <label className="font-bold">Место для твоей работы</label>
-                <textarea
-                  value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
-                  placeholder="Напиши здесь свой ответ..."
-                  rows={7}
-                  className="mt-3 w-full rounded-2xl border border-[#e5ddcf] bg-[#fffdfa] p-4 outline-none focus:border-amber-500"
-                />
+              {!submission ? (
+  <div className="mt-8">
+    <label className="font-bold">Место для твоей работы</label>
 
-                <div className="mt-5 rounded-2xl border border-dashed border-[#d8cbb8] bg-[#fffdfa] p-5">
-                  <label className="block font-semibold">📎 Прикрепить фото, видео или документ</label>
-                  <p className="mt-1 text-sm text-slate-500">JPG, PNG, WEBP, MP4, MOV, PDF, DOC, DOCX. До 50 МБ на файл.</p>
-                  <input
-                    type="file"
-                    multiple
-                    accept={ACCEPTED_FILES}
-                    onChange={(e) => setFiles(Array.from(e.target.files || []))}
-                    className="mt-4 block w-full text-sm"
-                  />
-                  {files.length > 0 && (
-                    <ul className="mt-3 list-disc pl-5 text-sm text-slate-600">
-                      {files.map((file) => <li key={`${file.name}-${file.size}`}>{file.name}</li>)}
-                    </ul>
-                  )}
-                </div>
+    <textarea
+      value={answer}
+      onChange={(e) => setAnswer(e.target.value)}
+      placeholder="Напиши здесь свой ответ..."
+      rows={7}
+      className="mt-3 w-full rounded-2xl border border-[#e5ddcf] bg-[#fffdfa] p-4 outline-none focus:border-amber-500"
+    />
 
-                <button
-                  onClick={submitAnswer}
-                  disabled={sending || (!answer.trim() && files.length === 0)}
-                  className="mt-5 w-full rounded-full bg-[#26334a] px-6 py-4 font-semibold text-white disabled:opacity-50"
-                >
-                  {sending ? "Отправляем..." : "Отправить работу"}
-                </button>
-                {message && <p className="mt-4 text-center text-sm font-medium">{message}</p>}
-              </div>
+    <div className="mt-5 rounded-2xl border border-dashed border-[#d8cbb8] bg-[#fffdfa] p-5">
+      <label className="block font-semibold">
+        📎 Прикрепить фото, видео или документ
+      </label>
+      <p className="mt-1 text-sm text-slate-500">
+        JPG, PNG, WEBP, MP4, MOV, PDF, DOC, DOCX. До 50 МБ на файл.
+      </p>
+      <input
+        type="file"
+        multiple
+        accept={ACCEPTED_FILES}
+        onChange={(e) => setFiles(Array.from(e.target.files || []))}
+        className="mt-4 block w-full text-sm"
+      />
+
+      {files.length > 0 && (
+        <ul className="mt-3 list-disc pl-5 text-sm text-slate-600">
+          {files.map((file) => (
+            <li key={`${file.name}-${file.size}`}>{file.name}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+
+    <button
+      onClick={submitAnswer}
+      disabled={sending || (!answer.trim() && files.length === 0)}
+      className="mt-5 w-full rounded-full bg-[#26334a] px-6 py-4 font-semibold text-white disabled:opacity-50"
+    >
+      {sending ? "Отправляем..." : "Отправить работу"}
+    </button>
+
+    {message && (
+      <p className="mt-4 text-center text-sm font-medium">{message}</p>
+    )}
+  </div>
+) : (
+  <div className="mt-8 rounded-2xl border border-green-200 bg-green-50 p-5 text-center">
+    <p className="font-bold text-green-800">
+      Работа уже отправлена!
+    </p>
+    <p className="mt-2 text-sm text-green-700">
+      Повторная отправка этого задания недоступна.
+    </p>
+  </div>
+)}
             </>
           ) : (
             <p className="mt-8 rounded-2xl bg-amber-50 p-5">Для этой книги пока не найдено задание.</p>
