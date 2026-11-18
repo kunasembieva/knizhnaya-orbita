@@ -173,6 +173,7 @@ export default function BookPageClient({ bookId }: { bookId: string }) {
 } finally {
   setSending(false);
 }
+}
 
 
   if (loading) {
